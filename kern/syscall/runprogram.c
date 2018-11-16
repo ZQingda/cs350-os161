@@ -33,6 +33,114 @@
  * that execv() needs to do more than this function does.
  */
 
+#include <opt-A2.h>
+#if OPT_A2
+
+#include <types.h>
+#include <kern/errno.h>
+#include <kern/fcntl.h>
+#include <lib.h>
+#include <proc.h>
+#include <current.h>
+#include <addrspace.h>
+#include <vm.h>
+#include <vfs.h>
+#include <syscall.h>
+#include <test.h>
+#include <copyinout.h>
+
+/*
+ * Load program "progname" and start running it in usermode.
+ * Does not return except on error.
+ *
+ * Calls vfs_open on progname and thus may destroy it.
+ */
+int
+runprogram(char *progname, char ** argv, unsigned long argc)
+{
+	struct addrspace *as;
+	struct vnode *v;
+	vaddr_t entrypoint, stackptr;
+	vaddr_t argptr[argc + 1];
+	int result;
+
+	argptr[argc] = 0;
+
+	/* Open the file. */
+	result = vfs_open(progname, O_RDONLY, 0, &v);
+	if (result) {
+		return result;
+	}
+
+	/* We should be a new process. */
+	KASSERT(curproc_getas() == NULL);
+
+	/* Create a new address space. */
+	as = as_create();
+	if (as ==NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	/* Switch to it and activate it. */
+	curproc_setas(as);
+	as_activate();
+
+	/* Load the executable. */
+	result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+		return result;
+	}
+
+	/* Done with the file now. */
+	vfs_close(v);
+
+	/* Define the user stack in the address space */
+	result = as_define_stack(as, &stackptr);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		return result;
+	}
+
+	/* MY STUFF BEGIN FOR ARGS */
+
+	for (int i = argc - 1; i > -1; i--) {
+		int arglen = strlen(argv[i]) + 1;
+		stackptr = stackptr - (strlen(argv[i]) + 1);
+		argptr[i] = stackptr;
+
+		result = copyoutstr(argv[i], (userptr_t)stackptr, arglen, NULL);
+		if (result) {
+			return result;
+		}
+	}
+	stackptr = stackptr - stackptr % 4;
+	for (int i = argc; i > -1; i--) {
+    stackptr = stackptr - ROUNDUP(sizeof(vaddr_t), 4);
+		
+		result = copyout(&argptr[i], (userptr_t)stackptr, sizeof(vaddr_t));
+		if (result) {
+			return result;
+		}
+	}
+	stackptr = stackptr - stackptr % 8;
+
+
+	/* END MY STUFF */
+
+	/* Warp to user mode. */
+	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+			  stackptr, entrypoint);
+	
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
+}
+
+#endif
+
 #include <types.h>
 #include <kern/errno.h>
 #include <kern/fcntl.h>

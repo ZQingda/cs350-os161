@@ -279,4 +279,111 @@ sys_waitpid(pid_t pid,
   return(0);
 }
 
+int sys_execv(const char *program, char **args) {
+  if (program == NULL) {
+    return EFAULT;
+  }
+  
+  struct addrspace *oldas;
+  struct addrspace *newas;
+  struct vnode *v;
+  vaddr_t entrypoint, stackptr;
+  int result;
+  int argc = 0;
+
+  size_t prognamelen = strlen(program) + 1;
+  char *programname = kmalloc(prognamelen * sizeof(char *));
+  if (programname == NULL) {
+    return ENOMEN;
+  }
+  result = copyinstr((userptr_t)program, programname, programlen, NULL);
+  if (result) {
+    return result;
+  }
+
+  while(args[argc] != NULL) {
+    argc++;
+  }
+
+  char **argv = kmalloc((argc + 1) * sizeof(char *));
+  argv[argc] = NULL;
+  for(int i = 0; i < argc; i++) {
+    argv[i] = kmalloc((strlen(args[i]) + 1) * sizeof(char));
+    result = copyinstr((userptr_t)args[i], argv[i], strlen(args[i]) + 1, NULL);
+    if(result) {
+      return result;
+    }
+  }
+
+  /* take stuff from runprogram yaaaaaaaaay */
+
+  result = vfs_open(programname, O_RDONLY, 0, &v);
+	if (result) {
+		return result;
+	}
+
+  newas = as_create();
+  if (as ==NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+  oldas = curproc_getas();
+  curproc_setas(newas);
+  as_activate();
+
+  result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+		return result;
+	}
+
+  vfs_close(v);
+
+  result = as_define_stack(newas, &stackptr);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+    curproc_setas(oldas);
+		return result;
+	}
+
+  vaddr_t argptrs[argc + 1];
+  argptrs[argc] = 0;
+
+  for (int i = argc - 1; i > -1; i--) {
+    size_t arglen = strlen(argv[i]) + 1;
+    stackptr = stackptr = arglen;
+    result = copyoutstr(argv[i], (userptr_t)stackptr, arglen, NULL);
+    if (result) {
+      return result;
+    }
+    argptrs[i] = stackptr;
+  }
+
+  stackptr = stackptr - stackptr % 4;
+
+  for (int i = argc; i > -1; i--) {
+    int rounded = ROUNDUP(sizeof(vaddr_t), 4);
+    stackptr = stackptr - rounded;
+    result = copyout(&argptrs[i], (userptr_t)stackptr, sizeof(vaddr_t));
+    if (result) {
+      return result;
+    }
+  }
+
+  userptr_t uargptr = (userptr_t)stackptr;
+
+  stackptr = stackptr - stackptr % 8;
+
+  as_destroy(oldas);
+
+  enter_new_process(argc, uargptr,
+			  stackptr, entrypoint);
+	
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
+}
+
 #endif
