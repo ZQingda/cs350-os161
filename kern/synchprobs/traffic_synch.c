@@ -4,6 +4,8 @@
 #include <synch.h>
 #include <opt-A1.h>
 
+#include <array.h>
+
 /* 
  * This simple default synchronization mechanism allows only vehicle at a time
  * into the intersection.   The intersectionSem is used as a a lock.
@@ -21,7 +23,48 @@
 /*
  * replace this with declarations of any synchronization and other variables you need here
  */
-static struct semaphore *intersectionSem;
+
+
+
+struct car {
+  Direction from;
+  Direction to;
+};
+typedef struct car car;
+struct lock *car_lk;
+struct cv * car_cv;
+struct array* cars;
+bool not_collide(car* inside, car* outside);
+bool can_enter(car* outside);
+
+bool not_collide(car* inside, car* outside) {
+  if (inside->from == outside->from || (inside->from == outside->to && inside->to == outside->from)) {
+    return true;
+  }
+  else if (inside->to != outside->to && (((inside->from == north && inside->to == west) ||
+                                         (inside->from == east && inside->to == north) ||
+                                         (inside->from == south && inside->to == east) ||
+                                         (inside->from == west && inside->to == south))
+                                         ||
+                                         ((outside->from == north && outside->to == west) ||
+                                         (outside->from == east && outside->to == north) ||
+                                         (outside->from == south && outside->to == east) ||
+                                         (outside->from == west && outside->to == south)))) {
+                                           return true;
+                                         }
+  else {
+    return false;
+  }
+}
+
+bool can_enter(car* outside) {
+  for (unsigned int i = 0; i < array_num(cars); i++) {
+    if(not_collide(array_get(cars, i), outside) == false) {
+      return false;
+    }
+  }
+  return true;
+}
 
 
 /* 
@@ -36,10 +79,12 @@ intersection_sync_init(void)
 {
   /* replace this default implementation with your own implementation */
 
-  intersectionSem = sem_create("intersectionSem",1);
-  if (intersectionSem == NULL) {
-    panic("could not create intersection semaphore");
-  }
+  cars = array_create();
+  array_init(cars);
+
+  car_lk = lock_create("cars_lk");
+  car_cv = cv_create("cars_cv");
+
   return;
 }
 
@@ -54,8 +99,12 @@ void
 intersection_sync_cleanup(void)
 {
   /* replace this default implementation with your own implementation */
-  KASSERT(intersectionSem != NULL);
-  sem_destroy(intersectionSem);
+  KASSERT(cars != NULL);
+  KASSERT(car_lk != NULL);
+  KASSERT(car_cv != NULL);
+  array_destroy(cars);
+  lock_destroy(car_lk);
+  cv_destroy(car_cv);
 }
 
 
@@ -76,10 +125,22 @@ void
 intersection_before_entry(Direction origin, Direction destination) 
 {
   /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  P(intersectionSem);
+  KASSERT(cars != NULL);
+  KASSERT(car_lk != NULL);
+  KASSERT(car_cv != NULL);
+
+  lock_acquire(car_lk);
+
+  car* cur_car = kmalloc(sizeof(struct car));
+  cur_car->from = origin;
+  cur_car->to = destination;
+
+  while(!can_enter(cur_car)) {
+    cv_wait(car_cv, car_lk);
+  }
+  
+  array_add(cars, cur_car, NULL);
+  lock_release(car_lk);
 }
 
 
@@ -98,8 +159,20 @@ void
 intersection_after_exit(Direction origin, Direction destination) 
 {
   /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  V(intersectionSem);
+  KASSERT(cars != NULL);
+  KASSERT(car_lk != NULL);
+  KASSERT(car_cv != NULL);
+
+  lock_acquire(car_lk);
+
+  for (unsigned int i = 0; i < array_num(cars); i++) {
+    car* cur_car = array_get(cars, i);
+    if (cur_car->to == destination && cur_car->from == origin) {
+      array_remove(cars, i);
+      cv_broadcast(car_cv, car_lk);
+      break;
+    }
+  }
+
+  lock_release(car_lk);
 }

@@ -408,6 +408,18 @@ cmd_enabledbthreads(int nargs, char **args)
     return 0;
 }
 
+static
+int
+cmd_enabledbsyscall(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+
+    dbflags = dbflags | DB_SYSCALL;
+
+    return 0;
+}
+
 ////////////////////////////////////////
 //
 // Menus.
@@ -448,7 +460,8 @@ static const char *opsmenu[] = {
 	"[pwd]     Print current directory   ",
 	"[sync]    Sync filesystems          ",
 	"[panic]   Intentional panic         ",
-    "[dth]     Enable DB_THREADS         ",
+  "[dth]     Enable DB_THREADS         ",
+	"[dsy]     Enable DB_SYSCALL         ",
 	"[q]       Quit and shut down        ",
 	NULL
 };
@@ -559,7 +572,8 @@ static struct {
 	{ "pwd",	cmd_pwd },
 	{ "sync",	cmd_sync },
 	{ "panic",	cmd_panic },
-    { "dth",    cmd_enabledbthreads },
+  { "dth",    cmd_enabledbthreads },
+	{ "dsy",    cmd_enabledbsyscall },
 	{ "q",		cmd_quit },
 	{ "exit",	cmd_quit },
 	{ "halt",	cmd_quit },
